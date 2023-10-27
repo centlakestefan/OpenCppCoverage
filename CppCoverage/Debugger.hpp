@@ -77,7 +77,7 @@ namespace CppCoverage
 			DWORD dwThreadId);
 
 		ProcessStatus OnException(const DEBUG_EVENT&, IDebugEventsHandler&, HANDLE hProcess, HANDLE hThread) const;
-		void HandleCrashDump(const DEBUG_EVENT&, HANDLE hProcess, HANDLE hThread, bool includeFirstChance) const;
+		void HandleCrashDump(const EXCEPTION_DEBUG_INFO&, HANDLE hProcess, DWORD dwProcessId,HANDLE hThread,DWORD dwThreadId, bool includeFirstChance) const;
 
 	private:
 		std::unordered_map<DWORD, HANDLE> processHandles_;

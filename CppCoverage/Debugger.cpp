@@ -253,16 +253,15 @@ namespace CppCoverage
 	
 	void
 		Debugger::HandleCrashDump(
-			const DEBUG_EVENT& debugEvent,
-			HANDLE hProcess,
-			HANDLE hThread,
+			const EXCEPTION_DEBUG_INFO& exception,
+			HANDLE hProcess,DWORD dwProcessId,
+			HANDLE hThread,DWORD dwThreadId,
 			bool includeFirstChance) const
 	{
 		// Crash dump is not enabled
 		if (!dumpOnCrash_)
 			return;
 
-		const auto& exception = debugEvent.u.Exception;
 		// Do not create a crashdump on a first chance exception (can still be caught)
 		if (exception.dwFirstChance && !includeFirstChance)
 			return;
@@ -276,12 +275,12 @@ namespace CppCoverage
 		ExceptionPointers.ExceptionRecord = const_cast<EXCEPTION_RECORD*>(&exception.ExceptionRecord);
 		ExceptionPointers.ContextRecord = &ctx;
 
-		auto crash_name = L"crash-" + std::to_wstring(debugEvent.dwProcessId) + L".dmp";
+		auto crash_name = L"crash-" + std::to_wstring(dwProcessId) + L".dmp";
 
 		if (Tools::CreateMiniDumpFromException(
 			&ExceptionPointers,
-			debugEvent.dwProcessId,
-			debugEvent.dwThreadId,
+			dwProcessId,
+			dwThreadId,
 			hProcess,
 			crash_name.c_str()))
 		{
@@ -320,7 +319,7 @@ namespace CppCoverage
 				LOG_WARNING << "It seems there is an assertion failure or you call DebugBreak() in your program.";
 				LOG_WARNING << Tools::GetSeparatorLine();
 
-				HandleCrashDump(debugEvent, hProcess, hThread, true);
+				HandleCrashDump(debugEvent.u.Exception, hProcess, debugEvent.dwProcessId,hThread,debugEvent.dwThreadId,true);
 
                 if (stopOnAssert_)
                 {
@@ -334,17 +333,17 @@ namespace CppCoverage
 			}
 			case IDebugEventsHandler::ExceptionType::NotHandled:
 			{
-				HandleCrashDump(debugEvent, hProcess, hThread, false);
+				HandleCrashDump(debugEvent.u.Exception, hProcess, debugEvent.dwProcessId, hThread, debugEvent.dwThreadId, false);
 				return ProcessStatus{ boost::none, DBG_EXCEPTION_NOT_HANDLED };
 			}
 			case IDebugEventsHandler::ExceptionType::Error:
 			{
-				HandleCrashDump(debugEvent, hProcess, hThread, false);
+				HandleCrashDump(debugEvent.u.Exception, hProcess, debugEvent.dwProcessId, hThread, debugEvent.dwThreadId, false);
 				return ProcessStatus{ boost::none, DBG_EXCEPTION_NOT_HANDLED };
 			}
 			case IDebugEventsHandler::ExceptionType::CppError:
 			{
-				HandleCrashDump(debugEvent, hProcess, hThread, false);
+				HandleCrashDump(debugEvent.u.Exception, hProcess, debugEvent.dwProcessId, hThread, debugEvent.dwThreadId, false);
 				if (continueAfterCppException_)
 				{
 					const auto& exceptionRecord = exception.ExceptionRecord;
@@ -514,6 +513,8 @@ namespace CppCoverage
 		HRESULT					hr;
 		HANDLE					hProcess;
 		HANDLE					hThread;
+		DWORD					dwThreadId;
+		DWORD					dwProcessId;
 		EXCEPTION_DEBUG_INFO	di;
 
 		// winnt.h declares both EXCEPTION_RECORD and EXCEPTION_RECORD64 with very similar content.
@@ -525,6 +526,16 @@ namespace CppCoverage
 		memcpy(di.ExceptionRecord.ExceptionInformation, Exception->ExceptionInformation, sizeof(di.ExceptionRecord.ExceptionInformation));
 		di.ExceptionRecord.ExceptionRecord = NULL;
 		di.dwFirstChance = FirstChance;
+
+		hr = pDebugSystemObjects_->GetCurrentThreadSystemId(&dwThreadId);
+		if (FAILED(hr)) {
+			THROW("GetCurrentThreadSystemId failed");
+		}
+
+		hr = pDebugSystemObjects_->GetCurrentProcessSystemId(&dwProcessId);
+		if (FAILED(hr)) {
+			THROW("GetCurrentProcessSystemId failed");
+		}
 
 		hr = pDebugSystemObjects_->GetCurrentProcessHandle((PULONG64)&hProcess);
 		if (FAILED(hr)) {
@@ -550,6 +561,8 @@ namespace CppCoverage
 			LOG_WARNING << "It seems there is an assertion failure or you call DebugBreak() in your program.";
 			LOG_WARNING << Tools::GetSeparatorLine();
 
+			HandleCrashDump(di, hProcess,dwProcessId,hThread,dwThreadId,true);
+
 			if (stopOnAssert_)
 			{
 				LOG_WARNING << "Stop on assertion.";
@@ -562,14 +575,17 @@ namespace CppCoverage
 		}
 		case IDebugEventsHandler::ExceptionType::NotHandled:
 		{
+			HandleCrashDump(di, hProcess, dwProcessId, hThread, dwThreadId, false);
 			return DEBUG_STATUS_BREAK;
 		}
 		case IDebugEventsHandler::ExceptionType::Error:
 		{
+			HandleCrashDump(di, hProcess, dwProcessId, hThread, dwThreadId, false);
 			return DEBUG_STATUS_BREAK;
 		}
 		case IDebugEventsHandler::ExceptionType::CppError:
 		{
+			HandleCrashDump(di, hProcess, dwProcessId, hThread, dwThreadId, false);
 			if (continueAfterCppException_)
 			{
 				LOG_WARNING << "Continue after a C++ exception.";
