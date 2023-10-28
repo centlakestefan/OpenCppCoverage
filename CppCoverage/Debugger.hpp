@@ -110,11 +110,21 @@ namespace CppCoverage
 		HRESULT STDMETHODCALLTYPE ChangeSymbolState(ULONG Flags, ULONG64 Argument);
 		// IDebugOutputCallbacksWide
 		HRESULT STDMETHODCALLTYPE Output(ULONG Mask, PCWSTR Text);
+
+
 	private:
 		IDebugEventsHandler* debugEventsHandler_;
 		IDebugClient6* pDebug_;
 		IDebugControl* pDebugControl_;
 		IDebugSystemObjects* pDebugSystemObjects_;
+
+		enum DebugStatus {
+			RUN,
+			STOP,
+			DUMP
+		};
+
+		DebugStatus			DebugStatus_;
 	};
 }
 

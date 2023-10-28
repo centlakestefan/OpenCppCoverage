@@ -152,22 +152,50 @@ namespace CppCoverage
 			pDebug_->SetEventCallbacksWide(this);
 			pDebug_->SetOutputCallbacksWide(this);
 
+			// Make sure we get an initial breakpoint
+			pDebugControl_->AddEngineOptions(DEBUG_ENGOPT_INITIAL_BREAK);
+
 			// Build the command line for the process to debug
 			auto optionalCommandLine = CreateCommandLine(startInfo.GetArguments());
 
 			// Run the process under the debugger
-			hr = pDebug_->CreateProcessAndAttachWide(0, &(*optionalCommandLine)[0], (coverChildren_) ? DEBUG_PROCESS : DEBUG_ONLY_THIS_PROCESS, 0, 0);
+			hr = pDebug_->CreateProcessAndAttachWide(0, &(*optionalCommandLine)[0],( (coverChildren_) ? DEBUG_PROCESS : DEBUG_ONLY_THIS_PROCESS ) |  DEBUG_CREATE_PROCESS_NO_DEBUG_HEAP, 0, 0);
 			if (S_OK != hr) {
 				THROW("Failed to run process");
 			}
 
-			// Process debugger events until debug client gives an error
-			for(;;)
-			{
+			// Process debugger events until debug client gives an error or a callback sets the state variable to not RUN
+			DebugStatus_ = RUN;
+			while(DebugStatus_ == RUN) {
 				hr = pDebugControl_->WaitForEvent(0, 1000);
 				if (FAILED(hr)) {
 					break;
 				}
+			}
+
+			if (DebugStatus_ == DUMP && dumpOnCrash_) {
+				DWORD dwProcessId;
+
+				hr = pDebugSystemObjects_->GetCurrentProcessSystemId(&dwProcessId);
+				if (FAILED(hr)) {
+					THROW("GetCurrentProcessSystemId failed");
+				}
+
+				auto crash_name = "crash-" + std::to_string(dwProcessId) + ".dmp";
+
+				hr = pDebug_->WriteDumpFile(crash_name.c_str(), DEBUG_DUMP_SMALL);
+				if (FAILED(hr)) {
+					THROW("WriteDumpFile failed");
+				}
+
+				LOG_INFO << Tools::GetSeparatorLine();
+				LOG_INFO << "Created minidump " << crash_name;
+				LOG_INFO << Tools::GetSeparatorLine();
+			}
+			
+			hr = pDebug_->TerminateProcesses();
+			if (FAILED(hr)) {
+				LOG_ERROR << "Failed to terminate process";
 			}
 
 			// Disconnect our events
@@ -553,7 +581,7 @@ namespace CppCoverage
 		{
 		case IDebugEventsHandler::ExceptionType::BreakPoint:
 		{
-			return DEBUG_STATUS_NO_CHANGE;
+			return DEBUG_STATUS_GO;
 		}
 		case IDebugEventsHandler::ExceptionType::InvalidBreakPoint:
 		{
@@ -561,12 +589,13 @@ namespace CppCoverage
 			LOG_WARNING << "It seems there is an assertion failure or you call DebugBreak() in your program.";
 			LOG_WARNING << Tools::GetSeparatorLine();
 
-			HandleCrashDump(di, hProcess,dwProcessId,hThread,dwThreadId,true);
-
 			if (stopOnAssert_)
 			{
 				LOG_WARNING << "Stop on assertion.";
-				return DEBUG_STATUS_BREAK;
+
+				DebugStatus_ = DUMP;
+
+				return DEBUG_STATUS_NO_CHANGE;
 			}
 			else
 			{
@@ -575,22 +604,24 @@ namespace CppCoverage
 		}
 		case IDebugEventsHandler::ExceptionType::NotHandled:
 		{
-			HandleCrashDump(di, hProcess, dwProcessId, hThread, dwThreadId, false);
-			return DEBUG_STATUS_BREAK;
+			return DEBUG_STATUS_GO;
 		}
 		case IDebugEventsHandler::ExceptionType::Error:
 		{
-			HandleCrashDump(di, hProcess, dwProcessId, hThread, dwThreadId, false);
+			DebugStatus_ = DUMP;
+
 			return DEBUG_STATUS_BREAK;
 		}
 		case IDebugEventsHandler::ExceptionType::CppError:
 		{
-			HandleCrashDump(di, hProcess, dwProcessId, hThread, dwThreadId, false);
 			if (continueAfterCppException_)
 			{
 				LOG_WARNING << "Continue after a C++ exception.";
 				return DEBUG_STATUS_NO_CHANGE;
 			}
+
+			DebugStatus_ = DUMP;
+
 			return DEBUG_STATUS_BREAK;
 		}
 		}
